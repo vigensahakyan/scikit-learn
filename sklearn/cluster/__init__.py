@@ -14,6 +14,7 @@ from .dbscan_ import dbscan, DBSCAN
 from .optics_ import OPTICS, optics
 from .bicluster import SpectralBiclustering, SpectralCoclustering
 from .birch import Birch
+from .shared_nearest_neighbor_ import SNN, snn_clustering
 
 __all__ = ['AffinityPropagation',
            'AgglomerativeClustering',
@@ -36,4 +37,7 @@ __all__ = ['AffinityPropagation',
            'spectral_clustering',
            'ward_tree',
            'SpectralBiclustering',
-           'SpectralCoclustering']
+           'SpectralCoclustering',
+           'SNN',
+           'snn_clustering']
+
