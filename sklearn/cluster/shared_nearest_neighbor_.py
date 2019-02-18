@@ -15,7 +15,53 @@ from ..utils.testing import ignore_warnings
 from ..neighbors import NearestNeighbors
 
 
-def snn_clustering(X, k=5, eps=5, min_pts=10, metric='minkowski', metric_params=None,
+def find_core_neighbors(core_id, snn_graph, core_points, eps):
+    neighbors = []
+    # neighbors = Queue()
+
+    for idx, v in enumerate(core_points):
+        if v is True:
+            if snn_graph[core_id].get(idx, 0) > eps:
+                neighbors.append(idx)
+
+    return neighbors
+
+
+def expand_clusters(labels, snn_graph, neighbors, visited, C, core_points, eps):
+    neighbors_q = Queue()
+    [neighbors_q.put(x) for x in neighbors]
+
+    while neighbors_q.qsize() > 0:
+        p = neighbors_q.get()
+        if p in visited:
+            continue
+        else:
+            labels[p] = C
+            visited.add(p)
+            new_neighbors = find_core_neighbors(core_id=p, snn_graph=snn_graph, core_points=core_points, eps=eps)
+            [neighbors_q.put(x) for x in new_neighbors]
+
+
+def form_clusters_from_core_points(snn_graph, core_points, eps):
+    C = 0
+    visited_cores = set()
+    labels = [-1 for i in range(len(snn_graph))]
+    for idx, v in enumerate(core_points):
+        if v is True:
+            if idx in visited_cores:
+                continue
+            else:
+                visited_cores.add(idx)
+                C += 1
+                labels[idx] = C
+
+                neighbors = find_core_neighbors(core_id=idx, snn_graph=snn_graph, core_points=core_points, eps=eps)
+                expand_clusters(labels=labels, snn_graph=snn_graph, neighbors=neighbors, visited=visited_cores,
+                                C=C, core_points=core_points, eps=eps)
+
+    return labels
+
+def snn_clustering(X, k_neighbors=5, eps=5, min_pts=10, metric='minkowski', metric_params=None,
                    algorithm='auto', leaf_size=30, p=2, sample_weight=None,
                    n_jobs=None):
     """Perform Shared Nearest Neighbor (SNN) clustering from vector array or distance matrix.
@@ -129,7 +175,7 @@ def snn_clustering(X, k=5, eps=5, min_pts=10, metric='minkowski', metric_params=
         Society for Industrial and Applied Mathematics, (2003)
         """
 
-    if k < 0.0 or k > X.shape[0]:
+    if k_neighbors < 0.0 or k_neighbors > X.shape[0]:
         raise ValueError("k has to be in range [0, {0}]".format(X.shape[0]))
 
     if not eps > 0.0:
@@ -140,6 +186,71 @@ def snn_clustering(X, k=5, eps=5, min_pts=10, metric='minkowski', metric_params=
         sample_weight = np.asarray(sample_weight)
         check_consistent_length(X, sample_weight)
 
+    # Calculate neighborhood for all samples. This leaves the original point
+    # in, which needs to be considered later (i.e. point i is in the
+    # neighborhood of point i. While True, its useless information)
+    neighbors_model = NearestNeighbors(n_neighbors=k_neighbors, algorithm=algorithm,
+                                       leaf_size=leaf_size,
+                                       metric=metric,
+                                       metric_params=metric_params, p=p,
+                                       n_jobs=n_jobs)
+    neighbors_model.fit(X)
+    # This has worst case O(n^2) memory complexity
+    distances, indices = neighbors_model.kneighbors(X)
+    indices = [set(el.tolist()) for el in indices]
+
+    #  create shared nearest neighborhood graph
+    snn_graph = {}  # adjacency hash tables
+    print("IDX len {0}".format(len(indices)))
+    for i in range(len(indices)):
+        for j in range(i+1):
+            i_set = indices[i]
+            j_set = indices[j]
+            intersect_cnt = len(i_set.intersection(j_set))
+
+            if (j in i_set) & (i in j_set):
+                snn_graph.setdefault(i, {})[j] = intersect_cnt
+                # TODO review
+                snn_graph.setdefault(j, {})[i] = intersect_cnt
+
+    #  Find point densities
+    densities = [0]*len(indices)
+    core_points = [False] * len(indices)
+    cnt = 0
+    for k, v in snn_graph.items():
+        densities[k] = len(v)
+        if len(v) >= min_pts:
+            core_points[k] = True
+            cnt+=1
+
+
+
+    print("cor point cnt {0}".format(cnt))
+    print(len(core_points))
+    print(core_points)
+
+    cluster_labels = form_clusters_from_core_points(snn_graph=snn_graph, core_points=core_points, eps=eps)
+
+    for i in range(len(indices)):
+        not_noise = False
+        max_sim = -(2**31 - 1)  # min value for int
+        best_core_id = -1
+        sim = 0
+        if core_points[i] is True:
+            continue
+        for idx, v in enumerate(core_points):
+            if v is True:
+                p = idx
+                sim = snn_graph[i].get(p, 0)
+                if sim >= eps:
+                    not_noise = True
+                if sim > max_sim:
+                    max_sim = sim
+                    best_core_id = p
+        if not_noise:
+            cluster_labels[i] = cluster_labels[best_core_id]
+    print(cluster_labels)
+    return cluster_labels, core_points
 
 
 
@@ -220,7 +331,7 @@ class SNNClustering(object):
                                 "If you put min_pts more than K that's mean "
                                 "you don't understand algorithm !!! Go and "
                                 "read that shithole paper again !")
-        self.N = self.X.shape[0]
+        self.N = None
 
         self.dist_matrix = None
         self.nn_dict = None
@@ -335,13 +446,13 @@ class SNNClustering(object):
 
     def remove_noise_assign_core_points(self):
         res_cnt = collections.Counter(self.labels)
-        print("KKKKKK", len(res_cnt))
+        # print("KKKKKK", len(res_cnt))
         for i in range(self.N):
             not_noise = False
             max_sim = -133333
             best_core_id = -2
             sim = None
-            print("XXXX : ",i)
+            # print("XXXX : ",i)
             if self.core_points[i] is True:
                 continue
 
@@ -358,7 +469,7 @@ class SNNClustering(object):
 
             if not_noise:
                 self.labels[i] = self.labels[best_core_id]
-                print("TTTGT: ", best_core_id)
+                # print("TTTGT: ", best_core_id)
 
         res_cnt = collections.Counter(self.labels)
         print(len(res_cnt))
@@ -393,7 +504,7 @@ class SNNClustering(object):
             raise BaseException("You have to provide features argument !!!")
 
         self.X = features
-
+        self.N = self.X.shape[0]
         # Step 1
         with FuncTimer(txt_message="Distance Matrix creation time is : "):
             self.create_distance_matrix()
@@ -426,5 +537,9 @@ class SNNClustering(object):
         with FuncTimer(txt_message="Noise removal time is : "):
 
             self.remove_noise_assign_core_points()
+        self.labels = np.array(self.labels)
+        return self
 
-        return self.labels
+
+
+

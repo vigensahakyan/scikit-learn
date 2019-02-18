@@ -28,7 +28,14 @@ X = StandardScaler().fit_transform(X)
 
 # #############################################################################
 # Compute DBSCAN
-snn_clst = SNNClustering(k=40, eps=10, min_pts=25).fit(X)
+# how many core points
+# min_pts - min number of links to have to became core point
+# eps - how similar point has to be to core point to not be noise
+import time
+st = time.time()
+snn_clst = SNNClustering(k=40, eps=4, min_pts=30).fit(X)
+print(time.time()- st)
+
 
 core_samples_mask = np.zeros_like(snn_clst.labels, dtype=bool)
 core_samples_mask[np.array(snn_clst.core_points)] = True
